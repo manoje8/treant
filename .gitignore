@@ -42,3 +42,5 @@ Thumbs.db
 
 uv.lock
 .venv
+
+.cache/

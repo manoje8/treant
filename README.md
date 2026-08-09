@@ -58,6 +58,40 @@ Parse HTML, save output to a file, and show stats:
 uv run main.py document.html -o output.txt --stats
 ```
 
+## Using treant as a library in other projects
+
+Treant is a regular installable Python package (`pyproject.toml` + `hatchling`
+build backend), so any other project can install it and import it directly —
+you don't need to copy code between repos.
+
+**During active development** (edit here, see changes everywhere immediately):
+```bash
+# with uv, from inside the other project
+uv add --editable /path/to/treant
+
+# or with plain pip
+pip install -e /path/to/treant
+```
+
+**Once it's stable, install straight from this GitHub repo:**
+```bash
+uv add git+https://github.com/manoje8/treant.git
+# or
+pip install git+https://github.com/manoje8/treant.git
+```
+
+Then, in the other project:
+```python
+from treant import process_document, ParseMethod
+
+content = await process_document("file.pdf", ParseMethod.DOCLING)
+```
+
+The CLI (`main.py` / the `treant` console script) is just a thin wrapper
+around this same `process_document` function — the reusable logic lives in
+`treant/api.py`, not in `main.py`, so it's importable without pulling in
+`argparse` or any CLI-only code.
+
 ## Testing
 
 Comprehensive test cases have been added for the CLI logic and parser backends using `pytest`.

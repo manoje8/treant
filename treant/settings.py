@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -23,6 +24,8 @@ class Settings:
 
     MAX_PAGE_PER_PARSE: int = int(os.getenv("MAX_PAGE_PER_PARSE", 20))
     MAX_UPLOAD_BYTES: int = int(os.getenv("MAX_UPLOAD_BYTES", 100_000_00))
+
+    CACHE_DIR = Path(".cache/doc_parser")
 
 
 settings = Settings()
