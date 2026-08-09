@@ -1,0 +1,8 @@
+beautifulsoup4
+docling
+trafilatura
+pypdf
+google-cloud-documentai
+python-dotenv
+ruff
+pre-commit
