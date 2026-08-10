@@ -5,20 +5,11 @@ from pathlib import Path
 
 from treant.constants import HTML_FORMATS, OFFICE_FORMATS, TEXT_FORMATS, ParseMethod
 from treant.docling import DoclingParser
-from treant.document_cache import DocumentCache
+from treant.document_cache import configure_doc_cache, get_doc_cache
 from treant.google_document_ai import GoogleDocAI
 from treant.settings import settings
 
 logger = logging.getLogger(__name__)
-
-_cache: DocumentCache | None = None
-
-
-def get_doc_cache() -> DocumentCache:
-    global _cache
-    if _cache is None:
-        _cache = DocumentCache(cache_dir=settings.CACHE_DIR)
-    return _cache
 
 
 def get_parser_method(parser_type: str):
@@ -104,6 +95,7 @@ async def process_document(
     parse_method: ParseMethod = ParseMethod.DOCLING,
     output_path: Path | None = None,
     display_stats: bool = False,
+    project_root: Path | None = None,
     **kwargs,
 ):
     """Process a document and extract its content.
@@ -113,6 +105,8 @@ async def process_document(
         parse_method: The parsing method to use.
         output_path: Optional path to save extracted content.
         display_stats: Whether to display content statistics.
+        project_root: Root of the project path, used to locate the
+            on-disk cache.
         **kwargs: Additional arguments passed to the parser.
 
     Returns:
@@ -124,6 +118,10 @@ async def process_document(
         ImportError: If required parser dependencies are not installed.
     """
     import asyncio
+
+    if project_root is not None:
+        configure_doc_cache(project_root=project_root)
+        logger.debug(f"Configured cache, Path: {project_root}")
 
     file_path = Path(file_path)
 

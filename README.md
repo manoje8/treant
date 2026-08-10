@@ -40,6 +40,7 @@ uv run main.py path/to/document.pdf
 - `-o`, `--output`: Save extracted content to a specified text file.
 - `--stats`: Display content extraction statistics.
 - `-v`, `--verbose`: Enable verbose logging output.
+- `project_root`: Root of the project path, used to locate the on-disk cache
 
 ### Examples
 
@@ -84,7 +85,7 @@ Then, in the other project:
 ```python
 from treant import process_document, ParseMethod
 
-content = await process_document("file.pdf", ParseMethod.DOCLING)
+content = await process_document("file.pdf", ParseMethod.DOCLING, project_root="project_path")
 ```
 
 The CLI (`main.py` / the `treant` console script) is just a thin wrapper

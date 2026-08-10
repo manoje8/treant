@@ -68,6 +68,14 @@ Examples:
         "-v", "--verbose", action="store_true", help="Enable verbose logging output"
     )
 
+    parser.add_argument(
+        "--project-root",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Root directory for the on-disk cache (default: current working directory)",
+    )
+
     parser.add_argument("--version", action="version", version="%(prog)s 1.0.0")
 
     return parser
@@ -81,12 +89,16 @@ async def main() -> None:
         logging.getLogger().setLevel(logging.DEBUG)
         logger.debug("Verbose logging enabled")
 
+    project_root = Path(args.project_root) if args.project_root else Path.cwd()
+    logger.debug(f"Cache root: {project_root}")
+
     try:
         await process_document(
             file_path=args.input_file,
             parse_method=args.parse_method,
             output_path=Path(args.output) if args.output else None,
             display_stats=args.stats,
+            project_root=project_root,
         )
 
         logger.info("Document processing completed successfully!")

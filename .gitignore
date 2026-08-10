@@ -44,3 +44,4 @@ uv.lock
 .venv
 
 .cache/
+.doc_cache/

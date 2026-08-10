@@ -5,8 +5,6 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from treant.settings import settings
-
 logger = logging.getLogger(__name__)
 
 
@@ -15,8 +13,14 @@ class DocumentCache:
     Filesystem-backed cache for parsed document content.
     """
 
-    def __init__(self, cache_dir: Path = settings.CACHE_DIR, manifest_path: Path | None = None):
-        self.cache_dir = cache_dir
+    def __init__(
+        self,
+        project_root: Path,
+        cache_dir_name: str = ".doc_cache",
+        manifest_path: Path | None = None,
+    ):
+        self.project_root = project_root
+        self.cache_dir = self.project_root / cache_dir_name
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._manifest_path = manifest_path or (self.cache_dir / "manifest.json")
         self._manifest: dict = self._load_manifest()
@@ -179,3 +183,28 @@ class DocumentCache:
             "size_mb": round(total_bytes / 1024 / 1024, 2),
             "cache_dir": str(self.cache_dir),
         }
+
+
+_cache: DocumentCache | None = None
+
+
+def configure_doc_cache(project_root: Path, **kwargs) -> DocumentCache:
+    """
+    Call once, at startup, from the consuming project:
+    configure_doc_cache(project_root=Path(__file__).resolve().parents[2])
+    Must run before any call to get_doc_cache().
+    """
+    global _cache
+    _cache = DocumentCache(project_root=project_root, **kwargs)
+    return _cache
+
+
+def get_doc_cache() -> DocumentCache:
+    global _cache
+    if _cache is None:
+        raise RuntimeError(
+            "DocumentCache is not configured. Call "
+            "configure_doc_cache(project_root=<your project's root>) "
+            "during app startup before calling get_doc_cache()."
+        )
+    return _cache
