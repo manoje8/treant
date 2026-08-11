@@ -119,9 +119,12 @@ async def process_document(
     """
     import asyncio
 
-    if project_root is not None:
-        configure_doc_cache(project_root=project_root)
-        logger.debug(f"Configured cache, Path: {project_root}")
+    if project_root is None:
+        project_root = Path.cwd().parent
+        logger.debug(f"No project_root provided, using parent directory: {project_root}")
+
+    configure_doc_cache(project_root=project_root)
+    logger.debug(f"Configured cache, Path: {project_root}")
 
     file_path = Path(file_path)
 
