@@ -40,8 +40,8 @@ metadata.pkl
 .DS_Store
 Thumbs.db
 
-uv.lock
 .venv
 
 .cache/
 .doc_cache/
+document/

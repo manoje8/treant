@@ -17,10 +17,10 @@ class Settings:
     TABLE_MODE = os.getenv("TABLE_MODE", "fast")
     DO_TABLES: bool = os.getenv("DO_TABLES", "true").lower() == "true"
     DO_OCR: bool = os.getenv("DO_OCR", "false").lower() == "true"
-    GENERATE_IMAGES: bool = os.getenv("GENERATE_IMAGES", "true").lower == "true"
-    IMAGES_SCALE: float = os.getenv("IMAGES_SCALE", 2.0)
-    PDF_CHUNK_THRESHOLD_PAGES: int = os.getenv("PDF_CHUNK_THRESHOLD_PAGES", 150)
-    PDF_CHUNK_SIZE_PAGES: int = os.getenv("PDF_CHUNK_SIZE_PAGES", 75)
+    GENERATE_IMAGES: bool = os.getenv("GENERATE_IMAGES", "true").lower() == "true"
+    IMAGES_SCALE: float = float(os.getenv("IMAGES_SCALE", 2.0))
+    PDF_CHUNK_THRESHOLD_PAGES: int = int(os.getenv("PDF_CHUNK_THRESHOLD_PAGES", 150))
+    PDF_CHUNK_SIZE_PAGES: int = int(os.getenv("PDF_CHUNK_SIZE_PAGES", 75))
 
     MAX_PAGE_PER_PARSE: int = int(os.getenv("MAX_PAGE_PER_PARSE", 20))
     MAX_UPLOAD_BYTES: int = int(os.getenv("MAX_UPLOAD_BYTES", 100_000_00))

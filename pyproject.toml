@@ -17,6 +17,7 @@ dependencies = [
     "python-dotenv",
     "ruff",
     "pre-commit",
+    "ipykernel>=7.3.0",
 ]
 
 [dependency-groups]

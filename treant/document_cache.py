@@ -1,7 +1,10 @@
+import fcntl
 import gzip
 import hashlib
 import json
 import logging
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,6 +14,16 @@ logger = logging.getLogger(__name__)
 class DocumentCache:
     """
     Filesystem-backed cache for parsed document content.
+
+    Each instance is self-contained — there is no module-level singleton.
+    Pass (or inject) an instance explicitly wherever a cache is needed.
+
+    Thread / multi-process safety
+    ─────────────────────────────
+    ``manifest.json`` is protected by a companion ``manifest.json.lock``
+    file using POSIX advisory locks (``fcntl.flock``).  Writes use the
+    atomic temp-file + ``os.replace`` pattern so readers never see a
+    partially-written manifest.
     """
 
     def __init__(
@@ -23,16 +36,59 @@ class DocumentCache:
         self.cache_dir = self.project_root / cache_dir_name
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._manifest_path = manifest_path or (self.cache_dir / "manifest.json")
+        self._lock_path = self._manifest_path.with_suffix(".json.lock")
         self._manifest: dict = self._load_manifest()
 
     def _load_manifest(self) -> dict:
-        if self._manifest_path.exists():
-            try:
-                return json.loads(self._manifest_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                logger.error("Cache - Manifest corrupted, starting fresh")
+        if not self._manifest_path.exists():
+            return {}
 
-        return {}
+        with open(self._lock_path, "a+") as lf:
+            fcntl.flock(lf, fcntl.LOCK_SH)
+            try:
+                try:
+                    return json.loads(self._manifest_path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    logger.error("Cache - Manifest corrupted, starting fresh")
+                    return {}
+            finally:
+                fcntl.flock(lf, fcntl.LOCK_UN)
+
+    def _save_manifest(self) -> None:
+        """Write the manifest atomically under an exclusive lock.
+
+        Steps:
+        1. Open (or create) the lock file and acquire an exclusive lock.
+        2. Serialize the manifest to a sibling temp file in the *same*
+           directory (guarantees the same filesystem → rename is atomic).
+        3. ``os.replace`` the temp file over the real manifest — this is
+           an atomic operation on POSIX systems.
+        4. Release the lock.
+        """
+        self._manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(self._lock_path, "a+") as lf:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+            try:
+                payload = json.dumps(self._manifest, indent=2, ensure_ascii=False)
+                fd, tmp_path = tempfile.mkstemp(
+                    dir=self._manifest_path.parent,
+                    prefix=".manifest_tmp_",
+                    suffix=".json",
+                )
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                        fh.write(payload)
+                    os.replace(tmp_path, self._manifest_path)
+                except Exception:
+                    # Clean up the orphaned temp file on failure.
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                    raise
+            finally:
+                fcntl.flock(lf, fcntl.LOCK_UN)
 
     @staticmethod
     def _hash_file_content(file_path: Path) -> str:
@@ -54,12 +110,6 @@ class DocumentCache:
             stale_file.unlink(missing_ok=True)
             self._save_manifest()
 
-    def _save_manifest(self) -> None:
-        self._manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        self._manifest_path.write_text(
-            json.dumps(self._manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-
     def get(self, cache_key: str) -> list[dict] | None:
         entry = self._manifest.get(cache_key)
 
@@ -78,7 +128,7 @@ class DocumentCache:
 
         if stored_hash is None or stored_size is None:
             logger.warning(
-                f"Cache - Entry {cache_key[:8]}\u2026 missing fingerprint fields, evicting "
+                f"Cache - Entry {cache_key[:8]}… missing fingerprint fields, evicting "
                 f"(written before staleness-guard was added)"
             )
             self._evict(cache_key)
@@ -87,14 +137,13 @@ class DocumentCache:
         try:
             current_size = source_path.stat().st_size
         except OSError:
-            logger.warning(f"Cache - Source file gone for {cache_key[:8]}\u2026, evicting")
+            logger.warning(f"Cache - Source file gone for {cache_key[:8]}…, evicting")
             self._evict(cache_key)
             return None
 
         if current_size != stored_size:
             logger.warning(
-                f"Cache STALE (size changed) - key={cache_key[:8]}\u2026 "
-                f"file={entry['source_file']}"
+                f"Cache STALE (size changed) - key={cache_key[:8]}… file={entry['source_file']}"
             )
             self._evict(cache_key)
             return None
@@ -102,7 +151,7 @@ class DocumentCache:
         current_hash = self._hash_file_content(source_path)
         if current_hash != stored_hash:
             logger.warning(
-                f"Cache STALE (content changed, mtime preserved) - key={cache_key[:8]}\u2026 "
+                f"Cache STALE (content changed, mtime preserved) - key={cache_key[:8]}… "
                 f"file={entry['source_file']}"
             )
             self._evict(cache_key)
@@ -112,11 +161,11 @@ class DocumentCache:
             with gzip.open(cache_file, "rt", encoding="utf-8") as f:
                 content_list = json.load(f)
 
-            logger.info(f"Cache HIT - key={cache_key[:8]}\u2026 file={entry['source_file']}")
+            logger.info(f"Cache HIT - key={cache_key[:8]}… file={entry['source_file']}")
             return content_list
 
         except (OSError, json.JSONDecodeError) as e:
-            logger.warning(f"Cache - Corrupted entry {cache_key[:8]}\u2026, evicting. Error: {e}")
+            logger.warning(f"Cache - Corrupted entry {cache_key[:8]}…, evicting. Error: {e}")
             self._evict(cache_key)
             return None
 
@@ -126,7 +175,7 @@ class DocumentCache:
         content_list: list[dict],
         file_path: str | Path,
         parse_method: str,
-    ):
+    ) -> None:
         file_path = Path(file_path)
         filename = f"{cache_key}.json.gz"
         cache_file = self.cache_dir / filename
@@ -153,23 +202,22 @@ class DocumentCache:
         }
 
         self._save_manifest()
-        logger.info(f"Cache STORE - key={cache_key[:8]}\u2026 blocks={len(content_list)}")
+        logger.info(f"Cache STORE - key={cache_key[:8]}… blocks={len(content_list)}")
 
     def invalidate(self, file_path: str | Path) -> int:
-        """
-        Remove all cache entries for a given source file.
+        """Remove all cache entries for a given source file.
+
         Useful when a file is re-uploaded or explicitly re-processed.
         Returns the number of entries removed.
         """
-
-        state_keys = [
+        stale_keys = [
             k for k, v in self._manifest.items() if v.get("source_file") == str(file_path)
         ]
 
-        for key in state_keys:
+        for key in stale_keys:
             self._evict(key)
 
-        return len(state_keys)
+        return len(stale_keys)
 
     def stats(self) -> dict:
         total_bytes = sum(
@@ -183,28 +231,3 @@ class DocumentCache:
             "size_mb": round(total_bytes / 1024 / 1024, 2),
             "cache_dir": str(self.cache_dir),
         }
-
-
-_cache: DocumentCache | None = None
-
-
-def configure_doc_cache(project_root: Path, **kwargs) -> DocumentCache:
-    """
-    Call once, at startup, from the consuming project:
-    configure_doc_cache(project_root=Path(__file__).resolve().parents[2])
-    Must run before any call to get_doc_cache().
-    """
-    global _cache
-    _cache = DocumentCache(project_root=project_root, **kwargs)
-    return _cache
-
-
-def get_doc_cache() -> DocumentCache:
-    global _cache
-    if _cache is None:
-        raise RuntimeError(
-            "DocumentCache is not configured. Call "
-            "configure_doc_cache(project_root=<your project's root>) "
-            "during app startup before calling get_doc_cache()."
-        )
-    return _cache

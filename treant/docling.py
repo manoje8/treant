@@ -345,19 +345,28 @@ class DoclingParser(Parser):
             raise
 
     def parse_html(self, file_path: str | Path, output_dir: str | None = None, **kwargs):
+        html_path = Path(file_path)
+        if not html_path.exists():
+            raise FileNotFoundError(f"HTML file does not exist: {html_path}")
+
+        if html_path.suffix.lower() not in HTML_FORMATS:
+            raise ValueError(f"Unsupported HTML format: {html_path.suffix}")
+
         try:
-            html_path = Path(file_path)
-            if not html_path.exists():
-                raise FileNotFoundError(f"HTML file does not exist: {html_path}")
+            name_without_suff = html_path.stem
 
-            if html_path.suffix.lower() not in HTML_FORMATS:
-                raise ValueError(f"Unsupported HTML format: {html_path.suffix}")
+            logger.info(f"Parsing {name_without_suff} html")
 
-            return self._parse_with_converter(html_path, output_dir)
+            with open(html_path, encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+
+            content_list = self.extract_html_content(content)
+
+            return content_list
 
         except Exception as e:
             logger.error(f"Error in parse html: {str(e)}")
-            raise
+            return self._parse_with_converter(html_path, output_dir)
 
     def parse_office(self, file_path: str | Path, output_dir: str | None = None, **kwargs):
         try:
@@ -375,10 +384,14 @@ class DoclingParser(Parser):
         try:
             file_path = Path(file_path)
             if not file_path.exists():
-                raise FileNotFoundError(f"Office file does not exist: {file_path}")
+                raise FileNotFoundError(f"Text file does not exist: {file_path}")
+
+            name_without_suff = file_path.stem
+
+            logger.info(f"Parsing {name_without_suff}")
 
             return self._parse_with_converter(file_path, output_dir)
 
         except Exception as e:
-            logger.error(f"Error in parse office: {str(e)}")
+            logger.error(f"Error in parse text: {str(e)}")
             raise

@@ -3,9 +3,9 @@ import json
 import logging
 from pathlib import Path
 
-from treant.constants import HTML_FORMATS, OFFICE_FORMATS, TEXT_FORMATS, ParseMethod
+from treant.constants import HTML_FORMATS, IMAGE_FORMATS, OFFICE_FORMATS, TEXT_FORMATS, ParseMethod
 from treant.docling import DoclingParser
-from treant.document_cache import configure_doc_cache, get_doc_cache
+from treant.document_cache import DocumentCache
 from treant.google_document_ai import GoogleDocAI
 from treant.settings import settings
 
@@ -63,21 +63,6 @@ def generate_cache_key(file_path: Path, parse_method: str) -> str:
     return hashlib.sha256(config_str.encode()).hexdigest()
 
 
-def get_cached_result(cache_key: str, file_path: Path, parse_method: str):
-    cache = get_doc_cache()
-    return cache.get(cache_key)
-
-
-def store_cache_result(
-    cache_key: str,
-    content_list: list[dict],
-    file_path: Path,
-    parse_method: str = None,
-):
-    cache = get_doc_cache()
-    cache.store(cache_key, content_list, file_path, parse_method=parse_method)
-
-
 def generate_doc_id(file_path: str | Path, read_bytes: int = 8192) -> str:
     path = Path(file_path).resolve()
     stat = path.stat()
@@ -96,6 +81,7 @@ async def process_document(
     output_path: Path | None = None,
     display_stats: bool = False,
     project_root: Path | None = None,
+    cache: DocumentCache | None = None,
     **kwargs,
 ):
     """Process a document and extract its content.
@@ -106,7 +92,10 @@ async def process_document(
         output_path: Optional path to save extracted content.
         display_stats: Whether to display content statistics.
         project_root: Root of the project path, used to locate the
-            on-disk cache.
+            on-disk cache.  Ignored when *cache* is provided explicitly.
+        cache: An explicit: class:`DocumentCache` instance to use.  When
+            ``None`` (default) a new instance is created from
+            *project_root*.
         **kwargs: Additional arguments passed to the parser.
 
     Returns:
@@ -114,17 +103,17 @@ async def process_document(
 
     Raises:
         FileNotFoundError: If the input file doesn't exist.
-        ValueError: If the file is too large, format is unsupported, or parsing fails.
-        ImportError: If required parser dependencies are not installed.
+        ValueError: If the file is too large, a format is unsupported, or parsing fails.
+        ImportError: If required, parser dependencies are not installed.
     """
     import asyncio
 
-    if project_root is None:
-        project_root = Path.cwd().parent
-        logger.debug(f"No project_root provided, using parent directory: {project_root}")
-
-    configure_doc_cache(project_root=project_root)
-    logger.debug(f"Configured cache, Path: {project_root}")
+    if cache is None:
+        if project_root is None:
+            project_root = Path.cwd().parent
+            logger.debug(f"No project_root provided, using parent directory: {project_root}")
+        cache = DocumentCache(project_root=project_root)
+        logger.debug(f"Created DocumentCache at: {cache.cache_dir}")
 
     file_path = Path(file_path)
 
@@ -144,7 +133,7 @@ async def process_document(
     logger.info(f"Processing: {file_path.name} ({file_size / 1024:.1f} KB)")
 
     cache_key = generate_cache_key(file_path, parse_method)
-    cache_result = get_cached_result(cache_key, file_path, parse_method)
+    cache_result = cache.get(cache_key)
 
     if cache_result is not None:
         logger.info(f"Cache HIT - Returning cached result for {file_path}")
@@ -195,6 +184,9 @@ async def process_document(
                 method=method_value,
                 **kwargs,
             )
+        elif ext in IMAGE_FORMATS:
+            logger.info("Development in progress, extracting content from images...")
+            raise NotImplementedError("Image content extraction is not yet implemented.")
         else:
             supported_formats = (
                 [".pdf"] + list(OFFICE_FORMATS) + list(HTML_FORMATS) + list(TEXT_FORMATS)
@@ -216,7 +208,7 @@ async def process_document(
 
     logger.info(f"Successfully extracted {len(content_list)} content blocks")
 
-    store_cache_result(cache_key, content_list, file_path, parse_method)
+    cache.store(cache_key, content_list, file_path, parse_method=parse_method)
     doc_id = generate_doc_id(file_path)
 
     if display_stats:

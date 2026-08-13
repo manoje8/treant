@@ -23,9 +23,10 @@ def mock_parser():
 
 @pytest.fixture(autouse=True)
 def mock_cache():
+    """Patch DocumentCache so no real filesystem cache is used in unit tests."""
     with (
-        patch("treant.treant.get_cached_result", return_value=None),
-        patch("treant.treant.store_cache_result"),
+        patch("treant.treant.DocumentCache.get", return_value=None),
+        patch("treant.treant.DocumentCache.store"),
     ):
         yield
 
