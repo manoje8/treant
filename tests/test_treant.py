@@ -43,9 +43,10 @@ def test_get_parser_method_google():
         assert parser == MockGoogle.return_value
 
 
-def test_get_parser_method_invalid():
-    with pytest.raises(ValueError, match="Unsupported parser type"):
-        get_parser_method("invalid")
+def test_get_parser_default_method():
+    with patch("treant.treant.DoclingParser") as MockDocling:
+        parser = get_parser_method("invalid")
+        assert parser == MockDocling.return_value
 
 
 @pytest.mark.asyncio

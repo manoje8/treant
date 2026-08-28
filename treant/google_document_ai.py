@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 from pathlib import Path
@@ -29,7 +30,7 @@ class GoogleDocAI(Parser):
             )
             return False
 
-    def parse_pdf(
+    async def parse_pdf(
         self,
         file_path: str | Path,
         output_dir: str | None = None,
@@ -45,7 +46,7 @@ class GoogleDocAI(Parser):
                 logger.error(msg)
                 raise FileNotFoundError(msg)
 
-            content = self._process_pdf(pdf_path)
+            content = await self._process_pdf(pdf_path)
             return content
 
         except (FileNotFoundError, ValueError):
@@ -54,7 +55,7 @@ class GoogleDocAI(Parser):
             logger.error(f"Error in parsing pdf: {str(e)}")
             raise
 
-    def parse_doc(
+    async def parse_doc(
         self,
         file_path: str | Path,
         output_dir: str | None = None,
@@ -80,13 +81,13 @@ class GoogleDocAI(Parser):
             with open(doc_path, "rb") as f:
                 content = f.read()
 
-            content = self._process_with_doc_ai(content, ext, name_without_suff)
+            content = await self._call_doc_ai(content, ext, name_without_suff)
             return content
         except Exception as e:
             logger.error(f"Error in parsing Document: {str(e)}")
             raise
 
-    def parse_html(
+    async def parse_html(
         self,
         file_path: str | Path,
         output_dir: str | None = None,
@@ -118,46 +119,44 @@ class GoogleDocAI(Parser):
             logger.error(f"Error in parsing HTML: {str(e)}")
             raise
 
-    def _process_pdf(self, file_path: Path | str):
+    async def _process_pdf(self, file_path: Path | str):
+        file_path = Path(file_path)
         name_without_suffix = file_path.stem
         ext = file_path.suffix
 
         reader = PdfReader(file_path)
-        pages = reader.pages
-        total_pages = len(pages)
+        total_pages = len(reader.pages)
         max_page: int = settings.MAX_PAGE_PER_PARSE
 
-        logger.debug(f"{name_without_suffix} PDF with {total_pages}'s pages")
-
-        text = ""
+        logger.debug(f"{name_without_suffix}: PDF with {total_pages} pages")
 
         if total_pages <= max_page:
             with open(file_path, "rb") as f:
                 file_bytes = f.read()
-            text = self._process_with_doc_ai(file_bytes, ext, name_without_suffix)
-        else:
-            logger.info(f"PDF exceeds {max_page} pages and splitting into chunks...")
+            return await asyncio.to_thread(self._call_doc_ai, file_bytes, ext, name_without_suffix)
 
-            for i in range(0, total_pages, max_page):
-                writer = PdfWriter()
+        logger.info(f"PDF exceeds {max_page} pages, splitting into chunks...")
+        parts = []
+        for i in range(0, total_pages, max_page):
+            writer = PdfWriter()
+            split_end = min(i + max_page, total_pages)
+            for page_n in range(i, split_end):
+                writer.add_page(reader.pages[page_n])
 
-                split_end = min(i + max_page, total_pages)
+            with io.BytesIO() as bs:
+                writer.write(bs)
+                file_bytes = bs.getvalue()
 
-                for page_n in range(i, split_end):
-                    writer.add_page(reader[page_n])
+            split_text = await asyncio.to_thread(
+                self._call_doc_ai, file_bytes, ext, name_without_suffix
+            )
+            parts.append(split_text)
 
-                with io.BytesIO() as bs:
-                    writer.write(bs)
-                    file_bytes = bs.getvalue()
+        return "\n".join(parts)
 
-                split_text = self._process_with_doc_ai(file_bytes, ext, name_without_suffix)
-                text += split_text + "\n"
-
-        return text
-
-    def _process_with_doc_ai(
+    async def _call_doc_ai(
         self, content: bytes, ext: str, display_name: str | None = None
-    ) -> str:
+    ) -> documentai.Document:
         try:
             ext_key = ext.lower().lstrip(".")
             mime_type = GOOGLE_MIME_TYPES.get(ext_key)
@@ -176,39 +175,7 @@ class GoogleDocAI(Parser):
             )
             request = documentai.ProcessRequest(name=processor_name, raw_document=raw_doc)
 
-            result = self.client.process_document(
-                request=request,
-            )
-
-            document = result.document
-
-            return document.text
-
-        except ResourceExhausted:
-            logger.error("Document AI quota exhausted")
-            raise
-        except ServiceUnavailable as e:
-            logger.warning(f"Document AI transiently unavailable: {e}")
-            raise
-
-    def _call_doc_ai(self, content: bytes, ext: str) -> documentai.Document:
-        try:
-            ext_key = ext.lower().lstrip(".")
-            mime_type = GOOGLE_MIME_TYPES.get(ext_key)
-
-            if not mime_type:
-                raise ValueError(f"No MIME type mapping for extension: {ext}")
-
-            processor_name = self.client.processor_path(
-                settings.PROJECT_ID,
-                settings.GCP_DOC_AI_LOCATION,
-                settings.GCP_DOC_AI_PROCESSOR_ID,
-            )
-
-            raw_doc = documentai.RawDocument(content=content, mime_type=mime_type)
-            request = documentai.ProcessRequest(name=processor_name, raw_document=raw_doc)
-
-            result = self.client.process_document(request=request)
+            result = await self.client.batch_process_documents(request=request)
             return result.document
 
         except ResourceExhausted:

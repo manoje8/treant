@@ -12,7 +12,7 @@ class Parser:
         raise NotImplementedError("check_installation must be implemented by subclasses")
 
     def _parse_inline_markdown(self, text: str):
-        """Process inline markdown formatting (bold, italic, code, links)"""
+        """Process inline Markdown formatting (bold, italic, code, links)"""
         import re
 
         text = text.replace("&", "&amp").replace("<", "&lt;").replace(">", "&gt;")

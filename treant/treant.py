@@ -13,16 +13,14 @@ logger = logging.getLogger(__name__)
 
 
 def get_parser_method(parser_type: str):
-    """Factory function to instantiate the appropriate document parser.
+    """
+    Factory function to instantiate the appropriate document parser.
 
     Args:
         parser_type: The type of parser to use.
 
     Returns:
-        An instance of the requested parser.
-
-    Raises:
-        ValueError: If the parser type is not supported.
+        An instance of the requested parser or default parser.
     """
     parser_name = parser_type.strip().lower()
 
@@ -31,10 +29,12 @@ def get_parser_method(parser_type: str):
     elif parser_name == ParseMethod.DOCLING:
         return DoclingParser()
     else:
-        raise ValueError(
+        logger.warning(
             f"Unsupported parser type: {parser_type}. "
+            f"Using default Docling parser"
             f"Available options: {ParseMethod.GOOGLE_DOC_AI}, {ParseMethod.DOCLING}"
         )
+        return DoclingParser()
 
 
 def hash_file_content(file_path: Path) -> str:
