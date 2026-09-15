@@ -81,7 +81,7 @@ class GoogleDocAI(Parser):
             with open(doc_path, "rb") as f:
                 content = f.read()
 
-            content = await self._call_doc_ai(content, ext, name_without_suff)
+            content = await asyncio.to_thread(self._call_doc_ai, content, ext, name_without_suff)
             return content
         except Exception as e:
             logger.error(f"Error in parsing Document: {str(e)}")
@@ -154,9 +154,7 @@ class GoogleDocAI(Parser):
 
         return "\n".join(parts)
 
-    async def _call_doc_ai(
-        self, content: bytes, ext: str, display_name: str | None = None
-    ) -> documentai.Document:
+    def _call_doc_ai(self, content: bytes, ext: str, display_name: str | None = None) -> str:
         try:
             ext_key = ext.lower().lstrip(".")
             mime_type = GOOGLE_MIME_TYPES.get(ext_key)
@@ -175,8 +173,8 @@ class GoogleDocAI(Parser):
             )
             request = documentai.ProcessRequest(name=processor_name, raw_document=raw_doc)
 
-            result = await self.client.batch_process_documents(request=request)
-            return result.document
+            result = self.client.process_document(request=request)
+            return result.document.text
 
         except ResourceExhausted:
             logger.error("Doc AI quota exhausted")

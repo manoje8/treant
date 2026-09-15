@@ -115,11 +115,11 @@ class DoclingParser(Parser):
         content_list = []
         if not block.get("children"):
             next(counter)
-            content_list.append(self._read_from_block(block, type, output_dir, num))
+            content_list.append(self._read_from_block(block, type, output_dir, num, counter))
         else:
             if type not in ["groups", "body"]:
                 next(counter)
-                content_list.append(self._read_from_block(block, type, output_dir, num))
+                content_list.append(self._read_from_block(block, type, output_dir, num, counter))
             members = block["children"]
             for member in members:
                 next(counter)
@@ -150,7 +150,9 @@ class DoclingParser(Parser):
                 )
         return content_list
 
-    def _read_from_block(self, block, type: str, output_dir: Path, num: str) -> dict[str, Any]:
+    def _read_from_block(
+        self, block, type: str, output_dir: Path, num: str, counter
+    ) -> dict[str, Any]:
         page_idx = self._get_page_idx(block)
 
         if type == "texts":
@@ -175,7 +177,7 @@ class DoclingParser(Parser):
                 base64_str = parts[1] if len(parts) == 2 else parts[0]
                 image_dir = output_dir / "images"
                 image_dir.mkdir(parents=True, exist_ok=True)
-                image_path = image_dir / f"image_{num}.png"
+                image_path = image_dir / f"image_{next(counter)}.png"
 
                 self._image_executor.submit(self._write_image, image_path, base64_str)
 
@@ -204,7 +206,7 @@ class DoclingParser(Parser):
                     "page_idx": page_idx,
                 }
             except Exception as e:
-                logger.warn(f"Failed to process table {num}: {e}")
+                logger.warning(f"Failed to process table {num}: {e}")
                 return {
                     "type": "text",
                     "text": f"[Table processing failed: {block.get('caption', '')}]",
@@ -251,9 +253,8 @@ class DoclingParser(Parser):
 
         base_output_dir.mkdir(parents=True, exist_ok=True)
 
-        file_subdir = file_path.parent / file_path.stem / "docling"
-
         content_list: list[dict[str, Any]] = []
+        image_counter = count()
         for page_range in self._get_pdf_page_ranges(file_path):
             convert_kwargs = {"page_range": page_range} if page_range else {}
             result = converter.convert(str(file_path), **convert_kwargs)
@@ -270,8 +271,8 @@ class DoclingParser(Parser):
                     self._read_from_block_recursive(
                         doc_dict["body"],
                         "body",
-                        file_subdir,
-                        count(),
+                        base_output_dir,
+                        image_counter,
                         "0",
                         doc_dict,
                     )

@@ -1,10 +1,13 @@
 import hashlib
+import logging
 from pathlib import Path
 
 import trafilatura
 from bs4 import BeautifulSoup
 
 from treant.constants import BLOCK_TAGS, HEADING_TAGS, SKIP_TAGS, ParseMethod
+
+logger = logging.getLogger(__name__)
 
 
 class Parser:
@@ -15,7 +18,7 @@ class Parser:
         """Process inline Markdown formatting (bold, italic, code, links)"""
         import re
 
-        text = text.replace("&", "&amp").replace("<", "&lt;").replace(">", "&gt;")
+        text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
         # Bold text: **text** or __text__
         text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
@@ -209,6 +212,7 @@ class Parser:
                 parts.append(f"{prefix}<table>\n{text}\n</table>")
 
             else:
-                raise ValueError(f"Unhandled node type in _node_to_string: {node_type!r}")
+                logger.warning("Skipping unhandled node type in _node_to_string: %r", node_type)
+                continue
 
         return "\n\n".join(parts)
