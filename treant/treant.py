@@ -1,4 +1,6 @@
+import csv
 import hashlib
+import io
 import json
 import logging
 from pathlib import Path
@@ -82,6 +84,8 @@ async def process_document(
     display_stats: bool = False,
     project_root: Path | None = None,
     cache: DocumentCache | None = None,
+    output_format: str = "text",
+    table_format: str = "pipe",
     **kwargs,
 ):
     """Process a document and extract its content.
@@ -96,6 +100,10 @@ async def process_document(
         cache: An explicit: class:`DocumentCache` instance to use.  When
             ``None`` (default) a new instance is created from
             *project_root*.
+        output_format: ``'text'`` (default) for plain-text output or
+            ``'json'`` to serialise the full *content_list* as JSON.
+        table_format: How to render table blocks on output — ``'pipe'``
+            (default), ``'csv'``, or ``'markdown'``.
         **kwargs: Additional arguments passed to the parser.
 
     Returns:
@@ -185,11 +193,20 @@ async def process_document(
                 **kwargs,
             )
         elif ext in IMAGE_FORMATS:
-            logger.info("Development in progress, extracting content from images...")
-            raise NotImplementedError("Image content extraction is not yet implemented.")
+            logger.info("Detected image file, extracting content via OCR...")
+            content_list = await asyncio.to_thread(
+                doc_parser.parse_image,
+                file_path=file_path,
+                method=method_value,
+                **kwargs,
+            )
         else:
             supported_formats = (
-                [".pdf"] + list(OFFICE_FORMATS) + list(HTML_FORMATS) + list(TEXT_FORMATS)
+                [".pdf"]
+                + list(OFFICE_FORMATS)
+                + list(HTML_FORMATS)
+                + list(TEXT_FORMATS)
+                + list(IMAGE_FORMATS)
             )
             raise ValueError(
                 f"Unsupported file format: '{ext}'. "
@@ -215,7 +232,9 @@ async def process_document(
         display_content_stats(content_list)
 
     if output_path:
-        await save_content(content_list, output_path)
+        await save_content(
+            content_list, output_path, output_format=output_format, table_format=table_format
+        )
 
     return content_list, doc_id
 
@@ -246,22 +265,103 @@ def display_content_stats(content_list: list) -> None:
     logger.info("─" * 50)
 
 
-async def save_content(content_list: list, output_path: Path) -> None:
-    """Save extracted content to a file."""
+async def save_content(
+    content_list: list,
+    output_path: Path,
+    output_format: str = "text",
+    table_format: str = "pipe",
+) -> None:
+    """Save extracted content to a file.
+
+    Args:
+        content_list: The list of content blocks to save.
+        output_path: Destination file path.
+        output_format: ``'text'`` for plain-text or ``'json'`` for
+            structured JSON output.
+        table_format: Table serialisation style — ``'pipe'`` (default),
+            ``'csv'``, or ``'markdown'``.
+    """
     try:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(output_path, "w", encoding="utf-8") as f:
-            for block in content_list:
-                if isinstance(block, dict):
-                    text = block.get("text", "")
-                    if text:
-                        f.write(text + "\n\n")
-                elif isinstance(block, str):
-                    f.write(block + "\n\n")
+        if output_format == "json":
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(content_list, f, indent=2, ensure_ascii=False)
+        else:
+            with open(output_path, "w", encoding="utf-8") as f:
+                for block in content_list:
+                    if isinstance(block, dict):
+                        if block.get("type") == "table":
+                            rendered = _render_table(block, table_format)
+                            if rendered:
+                                f.write(rendered + "\n\n")
+                        else:
+                            text = block.get("text", "")
+                            if text:
+                                f.write(text + "\n\n")
+                    elif isinstance(block, str):
+                        f.write(block + "\n\n")
 
         logger.info(f"Content saved to: {output_path}")
     except Exception as e:
         logger.error(f"Failed to save output: {str(e)}")
         raise
+
+
+def _render_table(block: dict, table_format: str) -> str:
+    """Render a table block in the requested format.
+
+    Args:
+        block: A content block with ``type == 'table'`` and a
+            ``table_body`` key containing row data.
+        table_format: ``'pipe'``, ``'csv'``, or ``'markdown'``.
+
+    Returns:
+        The serialised table as a string.
+    """
+    table_body = block.get("table_body", [])
+    if not table_body:
+        return ""
+
+    # table_body is a list of rows; each row is a list of cell dicts
+    # with a "text" key, or plain strings.
+    rows: list[list[str]] = []
+    for row in table_body:
+        if isinstance(row, list):
+            cells = []
+            for cell in row:
+                if isinstance(cell, dict):
+                    cells.append(str(cell.get("text", "")))
+                else:
+                    cells.append(str(cell))
+            rows.append(cells)
+
+    if not rows:
+        return ""
+
+    if table_format == "csv":
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        for row in rows:
+            writer.writerow(row)
+        return buf.getvalue().rstrip("\r\n")
+
+    elif table_format == "markdown":
+        lines = []
+        # First row as header
+        header = rows[0]
+        lines.append("| " + " | ".join(header) + " |")
+        lines.append("| " + " | ".join("---" for _ in header) + " |")
+        for row in rows[1:]:
+            # Pad or trim to match header column count
+            padded = row + [""] * (len(header) - len(row))
+            lines.append("| " + " | ".join(padded[: len(header)]) + " |")
+        return "\n".join(lines)
+
+    else:
+        # Default: pipe-delimited (original behaviour)
+        lines = []
+        for row in rows:
+            lines.append(" | ".join(row))
+        return "\n".join(lines)

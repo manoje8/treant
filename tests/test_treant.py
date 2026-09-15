@@ -1,9 +1,11 @@
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from treant.constants import ParseMethod
 from treant.treant import (
+    _render_table,
     display_content_stats,
     get_parser_method,
     process_document,
@@ -18,6 +20,7 @@ def mock_parser():
     parser.parse_pdf.return_value = [{"type": "text", "text": "pdf content"}]
     parser.parse_html.return_value = [{"type": "text", "text": "html content"}]
     parser.parse_doc.return_value = [{"type": "text", "text": "doc content"}]
+    parser.parse_image.return_value = [{"type": "text", "text": "image ocr content"}]
     return parser
 
 
@@ -150,3 +153,187 @@ def test_display_content_stats(caplog):
     assert "Total content blocks: 3" in caplog.text
     assert "text: 1" in caplog.text
     assert "image: 1" in caplog.text
+
+
+# Image extraction routing
+@pytest.mark.asyncio
+async def test_process_document_image(mock_parser, tmp_path):
+    """Image files (.png) should be routed to parse_image."""
+    img_file = tmp_path / "photo.png"
+    img_file.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+
+    with patch("treant.treant.get_parser_method", return_value=mock_parser):
+        result, _ = await process_document(img_file, ParseMethod.DOCLING)
+
+    assert result == [{"type": "text", "text": "image ocr content"}]
+    mock_parser.parse_image.assert_called_once_with(file_path=img_file, method="docling")
+
+
+@pytest.mark.asyncio
+async def test_process_document_image_jpg(mock_parser, tmp_path):
+    """Image files (.jpg) should be routed to parse_image."""
+    img_file = tmp_path / "photo.jpg"
+    img_file.write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
+
+    with patch("treant.treant.get_parser_method", return_value=mock_parser):
+        result, _ = await process_document(img_file, ParseMethod.DOCLING)
+
+    assert result == [{"type": "text", "text": "image ocr content"}]
+    mock_parser.parse_image.assert_called_once()
+
+
+# Structured JSON output
+@pytest.mark.asyncio
+async def test_save_content_json(tmp_path):
+    """--output-format json should produce valid JSON with the full content_list."""
+    content = [
+        {"type": "text", "text": "Hello"},
+        {"type": "table", "table_body": [[{"text": "A"}, {"text": "B"}]]},
+    ]
+    output_file = tmp_path / "output.json"
+
+    await save_content(content, output_file, output_format="json")
+
+    loaded = json.loads(output_file.read_text())
+    assert loaded == content
+
+
+@pytest.mark.asyncio
+async def test_save_content_text_default(tmp_path):
+    """Default text output still works as before."""
+    content = [{"type": "text", "text": "Hello"}, "World"]
+    output_file = tmp_path / "output.txt"
+
+    await save_content(content, output_file)
+
+    saved_text = output_file.read_text()
+    assert "Hello\n\n" in saved_text
+    assert "World\n\n" in saved_text
+
+
+# Equation rendering – LaTeX detection
+class TestLatexDetection:
+    """Verify _detect_latex on the DoclingParser."""
+
+    @staticmethod
+    def _detect(text: str) -> str:
+        from treant.docling import DoclingParser
+
+        return DoclingParser._detect_latex(text)
+
+    def test_latex_frac(self):
+        assert self._detect(r"\frac{a}{b}") == "latex"
+
+    def test_latex_begin_env(self):
+        assert self._detect(r"\begin{equation}x^2\end{equation}") == "latex"
+
+    def test_latex_inline_math(self):
+        assert self._detect(r"$E = mc^2$") == "latex"
+
+    def test_latex_display_math(self):
+        assert self._detect(r"$$\sum_{i=1}^{n} x_i$$") == "latex"
+
+    def test_latex_sqrt(self):
+        assert self._detect(r"\sqrt{2}") == "latex"
+
+    def test_latex_subscript_braces(self):
+        assert self._detect(r"x_{i+1}") == "latex"
+
+    def test_latex_superscript_braces(self):
+        assert self._detect(r"e^{i\pi}") == "latex"
+
+    def test_plain_numeric(self):
+        assert self._detect("3.14159") == "plain"
+
+    def test_plain_text(self):
+        assert self._detect("no latex here") == "plain"
+
+    def test_plain_simple_equation(self):
+        assert self._detect("a + b = c") == "plain"
+
+
+# Table output as CSV / Markdown
+class TestRenderTable:
+    """Verify _render_table for all three table formats."""
+
+    SAMPLE_BLOCK = {
+        "type": "table",
+        "table_body": [
+            [{"text": "Name"}, {"text": "Age"}],
+            [{"text": "Alice"}, {"text": "30"}],
+            [{"text": "Bob"}, {"text": "25"}],
+        ],
+    }
+
+    def test_pipe_format(self):
+        result = _render_table(self.SAMPLE_BLOCK, "pipe")
+        lines = result.split("\n")
+        assert lines[0] == "Name | Age"
+        assert lines[1] == "Alice | 30"
+        assert lines[2] == "Bob | 25"
+
+    def test_csv_format(self):
+        result = _render_table(self.SAMPLE_BLOCK, "csv")
+        lines = result.replace("\r\n", "\n").split("\n")
+        assert lines[0] == "Name,Age"
+        assert lines[1] == "Alice,30"
+        assert lines[2] == "Bob,25"
+
+    def test_markdown_format(self):
+        result = _render_table(self.SAMPLE_BLOCK, "markdown")
+        lines = result.split("\n")
+        assert lines[0] == "| Name | Age |"
+        assert lines[1] == "| --- | --- |"
+        assert lines[2] == "| Alice | 30 |"
+        assert lines[3] == "| Bob | 25 |"
+
+    def test_empty_table(self):
+        block = {"type": "table", "table_body": []}
+        assert _render_table(block, "pipe") == ""
+
+    def test_plain_string_cells(self):
+        """table_body may contain plain strings instead of dicts."""
+        block = {
+            "type": "table",
+            "table_body": [["X", "Y"], ["1", "2"]],
+        }
+        result = _render_table(block, "csv")
+        assert "X,Y" in result
+        assert "1,2" in result
+
+
+@pytest.mark.asyncio
+async def test_save_content_table_csv(tmp_path):
+    """Tables in text mode with --table-format csv should render as CSV."""
+    content = [
+        {
+            "type": "table",
+            "table_body": [[{"text": "A"}, {"text": "B"}], [{"text": "1"}, {"text": "2"}]],
+        },
+    ]
+    output_file = tmp_path / "out.txt"
+
+    await save_content(content, output_file, output_format="text", table_format="csv")
+
+    text = output_file.read_text()
+    assert "A,B" in text
+    assert "1,2" in text
+
+
+@pytest.mark.asyncio
+async def test_save_content_table_markdown(tmp_path):
+    """Tables in text mode with --table-format markdown should render as Markdown."""
+    content = [
+        {
+            "type": "table",
+            "table_body": [[{"text": "Col1"}, {"text": "Col2"}], [{"text": "a"}, {"text": "b"}]],
+        },
+    ]
+    output_file = tmp_path / "out.txt"
+
+    await save_content(content, output_file, output_format="text", table_format="markdown")
+
+    text = output_file.read_text()
+    assert "| Col1 | Col2 |" in text
+    assert "| --- | --- |" in text
+    assert "| a | b |" in text

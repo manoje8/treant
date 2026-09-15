@@ -1,5 +1,6 @@
 import base64
 import logging
+import re
 import threading
 from concurrent.futures.thread import ThreadPoolExecutor
 from itertools import count
@@ -10,7 +11,7 @@ from docling.datamodel.pipeline_options import TableFormerMode
 from pypdf import PdfReader
 
 from treant.base_parser import Parser
-from treant.constants import HTML_FORMATS, OFFICE_FORMATS, TEXT_FORMATS
+from treant.constants import HTML_FORMATS, IMAGE_FORMATS, OFFICE_FORMATS, TEXT_FORMATS
 from treant.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,32 @@ class DoclingParser(Parser):
         if prov and isinstance(prov, list):
             return prov[0].get("page_no", 0)
         return 0
+
+    # Compiled once at class level for performance
+    _LATEX_PATTERNS: re.Pattern = re.compile(
+        r"(?:"
+        r"\\(?:frac|sqrt|sum|prod|int|lim|infty|partial|nabla|alpha|beta|gamma|delta"
+        r"|epsilon|theta|lambda|mu|sigma|omega|phi|psi|pi|cdot|times|div|pm|mp|leq|geq"
+        r"|neq|approx|equiv|subset|supset|cup|cap|in|notin|forall|exists|mathbb|mathcal"
+        r"|mathrm|text|left|right|over|under|hat|bar|vec|dot|ddot|tilde"
+        r"|log|ln|sin|cos|tan|exp|det|max|min|sup|inf|lim)\b"
+        r"|\\begin\{[^}]+\}"
+        r"|\\end\{[^}]+\}"
+        r"|\\[(\[]"  # \( or \[
+        r"|\\[)\]]"  # \) or \]
+        r"|\$\$.+?\$\$"  # display math $$...$$
+        r"|\$.+?\$"  # inline math $...$
+        r"|[_^]\{[^}]+\}"  # sub/superscript with braces: x_{i}, e^{2}
+        r")",
+        re.DOTALL,
+    )
+
+    @staticmethod
+    def _detect_latex(text: str) -> str:
+        """Return ``'latex'`` if *text* contains LaTeX markup, else ``'plain'``."""
+        if DoclingParser._LATEX_PATTERNS.search(text):
+            return "latex"
+        return "plain"
 
     def _write_image(self, image_path: Path, base64_str: str) -> None:
         """Write image bytes to disk — runs in thread pool."""
@@ -157,11 +184,12 @@ class DoclingParser(Parser):
 
         if type == "texts":
             if block["label"] == "formula":
+                text_format = self._detect_latex(block["orig"])
                 return {
                     "type": "equation",
                     "img_path": "",
                     "text": block["orig"],
-                    "text_format": "unknown",
+                    "text_format": text_format,
                     "page_idx": page_idx,
                 }
             else:
@@ -395,4 +423,37 @@ class DoclingParser(Parser):
 
         except Exception as e:
             logger.error(f"Error in parse text: {str(e)}")
+            raise
+
+    def parse_image(
+        self,
+        file_path: str | Path,
+        output_dir: str | None = None,
+        method: str = "auto",
+        lang: str | None = None,
+        **kwargs,
+    ):
+        """Parse an image file using Docling's OCR pipeline.
+
+        Docling's ``DocumentConverter`` natively supports image formats
+        (PNG, JPEG, TIFF, BMP, GIF, WebP).  OCR is forced on so that
+        text embedded in the image is extracted.
+        """
+        try:
+            image_path = Path(file_path)
+            if not image_path.exists():
+                raise FileNotFoundError(f"Image file does not exist: {image_path}")
+
+            ext = image_path.suffix.lower()
+            if ext not in IMAGE_FORMATS:
+                raise ValueError(
+                    f"Unsupported image format: {ext}. "
+                    f"Supported: {', '.join(sorted(IMAGE_FORMATS))}"
+                )
+
+            logger.info(f"Parsing image {image_path.name} with OCR pipeline")
+            return self._parse_with_converter(image_path, output_dir)
+
+        except Exception as e:
+            logger.error(f"Error in parse image: {str(e)}")
             raise

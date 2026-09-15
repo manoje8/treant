@@ -76,6 +76,22 @@ Examples:
         help="Root directory for the on-disk cache (default: current working directory)",
     )
 
+    parser.add_argument(
+        "--output-format",
+        type=str,
+        default="text",
+        choices=["text", "json"],
+        help="Output format: plain text or structured JSON (default: %(default)s)",
+    )
+
+    parser.add_argument(
+        "--table-format",
+        type=str,
+        default="pipe",
+        choices=["pipe", "csv", "markdown"],
+        help="Table serialisation style: pipe-delimited, CSV, or Markdown (default: %(default)s)",
+    )
+
     parser.add_argument("--version", action="version", version="%(prog)s 1.0.0")
 
     return parser
@@ -99,6 +115,8 @@ async def main() -> None:
             output_path=Path(args.output) if args.output else None,
             display_stats=args.stats,
             project_root=project_root,
+            output_format=args.output_format,
+            table_format=args.table_format,
         )
 
         logger.info("Document processing completed successfully!")

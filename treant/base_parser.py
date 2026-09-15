@@ -79,6 +79,17 @@ class Parser:
     ):
         raise NotImplementedError("parse_office_doc must be implemented by sub-classes")
 
+    def parse_image(
+        self,
+        file_path: str | Path,
+        output_dir: str | None = None,
+        method: str = "auto",
+        lang: str | None = None,
+        **kwargs,
+    ):
+        """Abstract method to parse image documents via OCR."""
+        raise NotImplementedError("parse_image must be implemented by sub-classes")
+
     def extract_html_content(self, html: str) -> list[dict]:
         content = trafilatura.extract(
             html,
