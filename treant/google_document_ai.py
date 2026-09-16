@@ -46,7 +46,7 @@ class GoogleDocAI(Parser):
                 logger.error(msg)
                 raise FileNotFoundError(msg)
 
-            content = await self._process_pdf(pdf_path)
+            content = await self._process_pdf(pdf_path, lang=lang)
             return content
 
         except (FileNotFoundError, ValueError):
@@ -81,7 +81,9 @@ class GoogleDocAI(Parser):
             with open(doc_path, "rb") as f:
                 content = f.read()
 
-            content = await asyncio.to_thread(self._call_doc_ai, content, ext, name_without_suff)
+            content = await asyncio.to_thread(
+                self._call_doc_ai, content, ext, name_without_suff, lang
+            )
             return content
         except Exception as e:
             logger.error(f"Error in parsing Document: {str(e)}")
@@ -119,7 +121,7 @@ class GoogleDocAI(Parser):
             logger.error(f"Error in parsing HTML: {str(e)}")
             raise
 
-    async def _process_pdf(self, file_path: Path | str):
+    async def _process_pdf(self, file_path: Path | str, lang: str | None = None):
         file_path = Path(file_path)
         name_without_suffix = file_path.stem
         ext = file_path.suffix
@@ -133,7 +135,9 @@ class GoogleDocAI(Parser):
         if total_pages <= max_page:
             with open(file_path, "rb") as f:
                 file_bytes = f.read()
-            return await asyncio.to_thread(self._call_doc_ai, file_bytes, ext, name_without_suffix)
+            return await asyncio.to_thread(
+                self._call_doc_ai, file_bytes, ext, name_without_suffix, lang
+            )
 
         logger.info(f"PDF exceeds {max_page} pages, splitting into chunks...")
         parts = []
@@ -148,13 +152,19 @@ class GoogleDocAI(Parser):
                 file_bytes = bs.getvalue()
 
             split_text = await asyncio.to_thread(
-                self._call_doc_ai, file_bytes, ext, name_without_suffix
+                self._call_doc_ai, file_bytes, ext, name_without_suffix, lang
             )
             parts.append(split_text)
 
         return "\n".join(parts)
 
-    def _call_doc_ai(self, content: bytes, ext: str, display_name: str | None = None) -> str:
+    def _call_doc_ai(
+        self,
+        content: bytes,
+        ext: str,
+        display_name: str | None = None,
+        lang: str | None = None,
+    ) -> str:
         try:
             ext_key = ext.lower().lstrip(".")
             mime_type = GOOGLE_MIME_TYPES.get(ext_key)
@@ -171,7 +181,25 @@ class GoogleDocAI(Parser):
             raw_doc = documentai.RawDocument(
                 content=content, mime_type=mime_type, display_name=display_name
             )
-            request = documentai.ProcessRequest(name=processor_name, raw_document=raw_doc)
+
+            # Build process options, adding OCR language hints when lang is given.
+            # Doc AI accepts BCP-47 codes (e.g. "fr", "de", "ja") directly.
+            process_options: documentai.ProcessOptions | None = None
+            if lang:
+                language_hints = [code.strip() for code in lang.split(",") if code.strip()]
+                if language_hints:
+                    logger.debug("Google Doc AI language hints: %s", language_hints)
+                    process_options = documentai.ProcessOptions(
+                        ocr_config=documentai.OcrConfig(
+                            hints=documentai.OcrConfig.Hints(language_hints=language_hints)
+                        )
+                    )
+
+            request = documentai.ProcessRequest(
+                name=processor_name,
+                raw_document=raw_doc,
+                **({"process_options": process_options} if process_options else {}),
+            )
 
             result = self.client.process_document(request=request)
             return result.document.text

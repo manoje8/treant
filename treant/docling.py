@@ -71,18 +71,19 @@ class DoclingParser(Parser):
         with open(image_path, "wb") as f:
             f.write(base64.b64decode(base64_str))
 
-    def _get_converter(self):
+    def _get_converter(self, lang: str | None = None):
         from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import (
-            PdfPipelineOptions,
-        )
+        from docling.datamodel.pipeline_options import OcrAutoOptions, PdfPipelineOptions
         from docling.document_converter import DocumentConverter, PdfFormatOption
 
         table_mode = str(settings.TABLE_MODE).lower()
         do_tables = settings.DO_TABLES
         do_ocr = settings.DO_OCR
 
-        cache_key = (table_mode, do_tables, do_ocr)
+        # Normalise lang into a sorted tuple so the cache key is stable
+        ocr_langs: tuple[str, ...] = tuple(sorted(lang.split(",") if lang else []))
+
+        cache_key = (table_mode, do_tables, do_ocr, ocr_langs)
         with self._converter_cache_lock:
             if cache_key in self._converter_cache:
                 return self._converter_cache[cache_key]
@@ -104,6 +105,16 @@ class DoclingParser(Parser):
                     )
                 except Exception as e:
                     logger.debug(f"Could not set TableFormer mode '{table_mode}': {e}")
+
+            # Propagate language hint to OCR engine when one is supplied.
+            # OcrAutoOptions accepts a ``lang`` list and passes it to whichever
+            # engine Docling selects at runtime (EasyOCR / Tesseract).
+            if ocr_langs and hasattr(pipeline_options, "ocr_options"):
+                try:
+                    pipeline_options.ocr_options = OcrAutoOptions(lang=list(ocr_langs))
+                    logger.debug("Docling OCR language hint set to: %s", ocr_langs)
+                except Exception as e:
+                    logger.debug("Could not set Docling OCR language hint: %s", e)
 
             # Only generate images if OCR or image extraction is needed
             generate_images = getattr(settings, "GENERATE_IMAGES", True)
@@ -270,13 +281,14 @@ class DoclingParser(Parser):
         self,
         file_path: Path,
         output_dir: str | None,
+        lang: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """
         Shared core logic for all supported formats.
         Converts the document (optionally in page-range chunks for large PDFs),
         traverses the block tree, and frees doc_dict after each chunk.
         """
-        converter = self._get_converter()
+        converter = self._get_converter(lang=lang)
 
         base_output_dir = (
             self._unique_output_dir(output_dir, file_path)
@@ -392,10 +404,10 @@ class DoclingParser(Parser):
             return False
 
     async def _parse_stream(
-        self, path: Path, output_dir: str | None
+        self, path: Path, output_dir: str | None, lang: str | None = None
     ) -> AsyncIterator[dict[str, Any]]:
         try:
-            async for block in self._parse_with_converter(path, output_dir):
+            async for block in self._parse_with_converter(path, output_dir, lang=lang):
                 yield block
         except Exception as e:
             logger.error(f"Error in parse: {str(e)}")
@@ -417,13 +429,13 @@ class DoclingParser(Parser):
             ext = file_path.suffix.lower()
 
             if ext == ".pdf":
-                return self.parse_pdf(file_path)
+                return self.parse_pdf(file_path, output_dir=output_dir, lang=lang)
             elif ext in HTML_FORMATS:
-                return self.parse_html(file_path)
+                return self.parse_html(file_path, output_dir=output_dir)
             elif ext in OFFICE_FORMATS:
-                return self.parse_office(file_path)
+                return self.parse_office(file_path, output_dir=output_dir, lang=lang)
             elif ext in TEXT_FORMATS:
-                return self.parse_text_file(file_path)
+                return self.parse_text_file(file_path, output_dir=output_dir, lang=lang)
             else:
                 raise ValueError(
                     f"Unsupported file format: {ext}. "
@@ -447,7 +459,7 @@ class DoclingParser(Parser):
             if not pdf_path.exists():
                 raise FileNotFoundError(f"PDF file does not exist: {pdf_path}")
 
-            return self._parse_stream(pdf_path, output_dir)
+            return self._parse_stream(pdf_path, output_dir, lang=lang)
 
         except Exception as e:
             logger.error(f"Error in parse pdf: {str(e)}")
@@ -477,19 +489,31 @@ class DoclingParser(Parser):
             logger.error(f"Error in parse html: {str(e)}")
             return self._parse_stream(html_path, output_dir)
 
-    def parse_office(self, file_path: str | Path, output_dir: str | None = None, **kwargs):
+    def parse_office(
+        self,
+        file_path: str | Path,
+        output_dir: str | None = None,
+        lang: str | None = None,
+        **kwargs,
+    ):
         try:
             file_path = Path(file_path)
             if not file_path.exists():
                 raise FileNotFoundError(f"Office file does not exist: {file_path}")
 
-            return self._parse_stream(file_path, output_dir)
+            return self._parse_stream(file_path, output_dir, lang=lang)
 
         except Exception as e:
             logger.error(f"Error in parse office: {str(e)}")
             raise
 
-    def parse_text_file(self, file_path: str | Path, output_dir: str | None = None, **kwargs):
+    def parse_text_file(
+        self,
+        file_path: str | Path,
+        output_dir: str | None = None,
+        lang: str | None = None,
+        **kwargs,
+    ):
         try:
             file_path = Path(file_path)
             if not file_path.exists():
@@ -499,7 +523,7 @@ class DoclingParser(Parser):
 
             logger.info(f"Parsing {name_without_suff}")
 
-            return self._parse_stream(file_path, output_dir)
+            return self._parse_stream(file_path, output_dir, lang=lang)
 
         except Exception as e:
             logger.error(f"Error in parse text: {str(e)}")
@@ -533,7 +557,7 @@ class DoclingParser(Parser):
                 )
 
             logger.info(f"Parsing image {image_path.name} with OCR pipeline")
-            return self._parse_stream(image_path, output_dir)
+            return self._parse_stream(image_path, output_dir, lang=lang)
 
         except Exception as e:
             logger.error(f"Error in parse image: {str(e)}")
