@@ -1,7 +1,9 @@
+import asyncio
 import base64
 import logging
 import re
 import threading
+from collections.abc import AsyncIterator
 from concurrent.futures.thread import ThreadPoolExecutor
 from itertools import count
 from pathlib import Path
@@ -21,6 +23,8 @@ class DoclingParser(Parser):
     """
     Docling document parsing utility class.
     """
+
+    _IMAGE_ID_CHUNK_SPACE = 100_000
 
     def __init__(self):
         super().__init__()
@@ -262,11 +266,11 @@ class DoclingParser(Parser):
             for start in range(1, num_pages + 1, chunk_size)
         ]
 
-    def _parse_with_converter(
+    async def _parse_with_converter(
         self,
         file_path: Path,
         output_dir: str | None,
-    ) -> list[dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """
         Shared core logic for all supported formats.
         Converts the document (optionally in page-range chunks for large PDFs),
@@ -274,41 +278,107 @@ class DoclingParser(Parser):
         """
         converter = self._get_converter()
 
-        if output_dir:
-            base_output_dir = self._unique_output_dir(output_dir, file_path)
-        else:
-            base_output_dir = file_path.parent / "docling_output"
+        base_output_dir = (
+            self._unique_output_dir(output_dir, file_path)
+            if output_dir
+            else file_path.parent / "docling_output"
+        )
 
         base_output_dir.mkdir(parents=True, exist_ok=True)
 
-        content_list: list[dict[str, Any]] = []
-        image_counter = count()
-        for page_range in self._get_pdf_page_ranges(file_path):
-            convert_kwargs = {"page_range": page_range} if page_range else {}
-            result = converter.convert(str(file_path), **convert_kwargs)
+        page_ranges = self._get_pdf_page_ranges(file_path)
 
-            if result.status.name != "SUCCESS":
-                logger.warning(
-                    f"Docling returned status={result.status.name} for "
-                    f"{file_path.name} (page_range={page_range}); errors: {result.errors}"
+        max_concurrency = getattr(settings, "PDF_CHUNK_MAX_CONCURRENCY", 4)
+        semaphore = asyncio.Semaphore(max_concurrency)
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def produce_chunk(chunk_index: int, page_range: tuple[int, int] | None):
+            async with semaphore:
+                return await asyncio.to_thread(
+                    self._convert_chunk,
+                    converter,
+                    file_path,
+                    page_range,
+                    base_output_dir,
+                    chunk_index,
+                    loop,
+                    queue,
                 )
 
-            doc_dict = result.document.export_to_dict()
+        producer_task = [
+            asyncio.ensure_future(produce_chunk(i, pr)) for i, pr in enumerate(page_ranges)
+        ]
+
+        async def close_queue_when_done():
             try:
-                content_list.extend(
-                    self._read_from_block_recursive(
-                        doc_dict["body"],
-                        "body",
-                        base_output_dir,
-                        image_counter,
-                        "0",
-                        doc_dict,
-                    )
-                )
-            finally:
-                del doc_dict
+                await asyncio.gather(*producer_task)
+            except Exception as exc:
+                # surface the first failing chunk to the consumer
+                for t in producer_task:
+                    t.cancel()
+                await queue.put(exc)
+                return
+            await queue.put(None)
 
-        return content_list
+        closer = asyncio.ensure_future(close_queue_when_done())
+
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                elif isinstance(item, Exception):
+                    raise item
+                _chunk_index, _page_range, content_item = item
+                yield content_item
+        finally:
+            # Early break / error on the consumer side shouldn't leave
+            # producer tasks or their threads running in the background.
+            for t in producer_task:
+                t.cancel()
+            closer.cancel()
+            await asyncio.gather(*producer_task, closer, return_exceptions=True)
+
+    def _convert_chunk(
+        self,
+        converter,
+        file_path: Path,
+        page_range: tuple[int, int] | None,
+        base_output_dir: Path,
+        chunk_index: int,
+        loop: asyncio.AbstractEventLoop,
+        queue: "asyncio.Queue",
+    ):
+        """
+        Runs in a worker thread. Converts one chunk, walks its tree, and
+        pushes each resulting item onto the shared queue as it's produced.
+        """
+        convert_kwargs = {"page_range": page_range} if page_range else {}
+        result = converter.convert(str(file_path), **convert_kwargs)
+
+        if result.status.name != "SUCCESS":
+            logger.warning(
+                f"Docling returned status={result.status.name} for "
+                f"{file_path.name} (page_range={page_range}); errors: {result.errors}"
+            )
+
+        doc_dict = result.document.export_to_dict()
+        try:
+            image_counter = count(chunk_index * self._IMAGE_ID_CHUNK_SPACE)
+            content_items = self._read_from_block_recursive(
+                doc_dict["body"],
+                "body",
+                base_output_dir,
+                image_counter,
+                "0",
+                doc_dict,
+            )
+
+            for item in content_items:
+                loop.call_soon_threadsafe(queue.put_nowait, (chunk_index, page_range, item))
+        finally:
+            del doc_dict
 
     def check_installation(self) -> bool:
         try:
@@ -320,6 +390,16 @@ class DoclingParser(Parser):
                 "Docling Python package is not installed. Install it with: pip install docling"
             )
             return False
+
+    async def _parse_stream(
+        self, path: Path, output_dir: str | None
+    ) -> AsyncIterator[dict[str, Any]]:
+        try:
+            async for block in self._parse_with_converter(path, output_dir):
+                yield block
+        except Exception as e:
+            logger.error(f"Error in parse: {str(e)}")
+            raise
 
     def parse_doc(
         self,
@@ -367,7 +447,7 @@ class DoclingParser(Parser):
             if not pdf_path.exists():
                 raise FileNotFoundError(f"PDF file does not exist: {pdf_path}")
 
-            return self._parse_with_converter(pdf_path, output_dir)
+            return self._parse_stream(pdf_path, output_dir)
 
         except Exception as e:
             logger.error(f"Error in parse pdf: {str(e)}")
@@ -395,7 +475,7 @@ class DoclingParser(Parser):
 
         except Exception as e:
             logger.error(f"Error in parse html: {str(e)}")
-            return self._parse_with_converter(html_path, output_dir)
+            return self._parse_stream(html_path, output_dir)
 
     def parse_office(self, file_path: str | Path, output_dir: str | None = None, **kwargs):
         try:
@@ -403,7 +483,7 @@ class DoclingParser(Parser):
             if not file_path.exists():
                 raise FileNotFoundError(f"Office file does not exist: {file_path}")
 
-            return self._parse_with_converter(file_path, output_dir)
+            return self._parse_stream(file_path, output_dir)
 
         except Exception as e:
             logger.error(f"Error in parse office: {str(e)}")
@@ -419,7 +499,7 @@ class DoclingParser(Parser):
 
             logger.info(f"Parsing {name_without_suff}")
 
-            return self._parse_with_converter(file_path, output_dir)
+            return self._parse_stream(file_path, output_dir)
 
         except Exception as e:
             logger.error(f"Error in parse text: {str(e)}")
@@ -433,7 +513,8 @@ class DoclingParser(Parser):
         lang: str | None = None,
         **kwargs,
     ):
-        """Parse an image file using Docling's OCR pipeline.
+        """
+        Parse an image file using Docling's OCR pipeline.
 
         Docling's ``DocumentConverter`` natively supports image formats
         (PNG, JPEG, TIFF, BMP, GIF, WebP).  OCR is forced on so that
@@ -452,7 +533,7 @@ class DoclingParser(Parser):
                 )
 
             logger.info(f"Parsing image {image_path.name} with OCR pipeline")
-            return self._parse_with_converter(image_path, output_dir)
+            return self._parse_stream(image_path, output_dir)
 
         except Exception as e:
             logger.error(f"Error in parse image: {str(e)}")

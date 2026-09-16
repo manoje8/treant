@@ -25,6 +25,8 @@ class Settings:
     MAX_PAGE_PER_PARSE: int = int(os.getenv("MAX_PAGE_PER_PARSE", 20))
     MAX_UPLOAD_BYTES: int = int(os.getenv("MAX_UPLOAD_BYTES", 100_000_00))
 
+    PDF_CHUNK_MAX_CONCURRENCY: int = int(os.getenv("PDF_CHUNK_MAX_CONCURRENCY", 4))
+
     CACHE_DIR = Path(".cache/doc_parser")
 
 

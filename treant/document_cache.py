@@ -19,7 +19,6 @@ class DocumentCache:
     Pass (or inject) an instance explicitly wherever a cache is needed.
 
     Thread / multi-process safety
-    ─────────────────────────────
     ``manifest.json`` is protected by a companion ``manifest.json.lock``
     file using POSIX advisory locks (``fcntl.flock``).  Writes use the
     atomic temp-file + ``os.replace`` pattern so readers never see a

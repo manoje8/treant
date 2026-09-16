@@ -77,6 +77,30 @@ def generate_doc_id(file_path: str | Path, read_bytes: int = 8192) -> str:
     return hasher.hexdigest()[:24]
 
 
+async def _collect(result: any) -> list[dict[str, any]]:
+    """
+    Normalize a parser method's return value into a list.
+
+    Parser methods are being migrated one at a time to return async
+    generators instead of plain lists. This accepts either shape so
+    process_document keeps working mid-migration, regardless of which
+    individual parse_* methods have been converted yet.
+    """
+    import inspect
+
+    if inspect.isasyncgen(result):
+        return [block async for block in result]
+    if inspect.iscoroutine(result):
+        result = await result
+        return await _collect(result)  # re-normalize in case awaiting it
+    if isinstance(result, list):
+        return result
+    raise TypeError(
+        f"Unexpected parser return type: {type(result).__name__}. "
+        "Expected list, coroutine, or async generator."
+    )
+
+
 async def process_document(
     file_path: str | Path,
     parse_method: ParseMethod = ParseMethod.DOCLING,
@@ -162,43 +186,34 @@ async def process_document(
 
         if ext == ".pdf":
             logger.info("Detected PDF file, parsing with OCR and layout analysis...")
-            content_list = await asyncio.to_thread(
-                doc_parser.parse_pdf,
-                file_path=file_path,
-                method=method_value,
-                **kwargs,
+            content_list = await _collect(
+                doc_parser.parse_pdf(file_path=file_path, method=method_value, **kwargs)
             )
         elif ext in HTML_FORMATS:
             logger.info("Detected HTML file, extracting structured content...")
-            content_list = await asyncio.to_thread(
-                doc_parser.parse_html,
-                file_path=file_path,
-                method=method_value,
-                **kwargs,
+            content_list = await _collect(
+                await asyncio.to_thread(
+                    doc_parser.parse_html, file_path=file_path, method=method_value, **kwargs
+                )
             )
         elif ext in OFFICE_FORMATS:
             logger.info("Detected Office document, extracting content...")
-            content_list = await asyncio.to_thread(
-                doc_parser.parse_doc,
-                file_path=file_path,
-                method=method_value,
-                **kwargs,
+            content_list = await _collect(
+                await asyncio.to_thread(
+                    doc_parser.parse_doc, file_path=file_path, method=method_value, **kwargs
+                )
             )
         elif ext in TEXT_FORMATS:
             logger.info("Detected text file, reading content...")
-            content_list = await asyncio.to_thread(
-                doc_parser.parse_doc,
-                file_path=file_path,
-                method=method_value,
-                **kwargs,
+            content_list = await _collect(
+                await asyncio.to_thread(doc_parser.parse_text_file, file_path=file_path, **kwargs)
             )
         elif ext in IMAGE_FORMATS:
             logger.info("Detected image file, extracting content via OCR...")
-            content_list = await asyncio.to_thread(
-                doc_parser.parse_image,
-                file_path=file_path,
-                method=method_value,
-                **kwargs,
+            content_list = await _collect(
+                await asyncio.to_thread(
+                    doc_parser.parse_image, file_path=file_path, method=method_value, **kwargs
+                )
             )
         else:
             supported_formats = (
