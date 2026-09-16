@@ -6,9 +6,8 @@ import logging
 from pathlib import Path
 
 from treant.constants import HTML_FORMATS, IMAGE_FORMATS, OFFICE_FORMATS, TEXT_FORMATS, ParseMethod
-from treant.docling import DoclingParser
 from treant.document_cache import DocumentCache
-from treant.google_document_ai import GoogleDocAI
+from treant.parser_registry import get_parser
 from treant.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -18,25 +17,21 @@ def get_parser_method(parser_type: str):
     """
     Factory function to instantiate the appropriate document parser.
 
+    Parsers are resolved via the ``treant.parsers`` entry-point group,
+    allowing third-party packages to register additional parsers by
+    declaring an entry point in their ``pyproject.toml``.
+
+    Falls back to the default parser (docling) when *parser_type* is
+    unknown.
+
     Args:
-        parser_type: The type of parser to use.
+        parser_type: The type of parser to use (e.g. ``"docling"``,
+            ``"google_doc_ai"``).
 
     Returns:
-        An instance of the requested parser or default parser.
+        An instance of the requested parser or the default parser.
     """
-    parser_name = parser_type.strip().lower()
-
-    if parser_name == ParseMethod.GOOGLE_DOC_AI:
-        return GoogleDocAI()
-    elif parser_name == ParseMethod.DOCLING:
-        return DoclingParser()
-    else:
-        logger.warning(
-            f"Unsupported parser type: {parser_type}. "
-            f"Using default Docling parser"
-            f"Available options: {ParseMethod.GOOGLE_DOC_AI}, {ParseMethod.DOCLING}"
-        )
-        return DoclingParser()
+    return get_parser(parser_type)
 
 
 def hash_file_content(file_path: Path) -> str:

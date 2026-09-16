@@ -3,7 +3,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from treant.base_parser import Parser
 from treant.constants import ParseMethod
+from treant.parser_registry import _reset, available_parsers, get_parser, register
 from treant.treant import (
     _render_table,
     display_content_stats,
@@ -35,21 +37,96 @@ def mock_cache():
 
 
 def test_get_parser_method_docling():
-    with patch("treant.treant.DoclingParser") as MockDocling:
-        parser = get_parser_method("docling")
-        assert parser == MockDocling.return_value
+    """Built-in 'docling' entry point should resolve to DoclingParser."""
+    from treant.docling import DoclingParser
+
+    parser = get_parser_method("docling")
+    assert isinstance(parser, DoclingParser)
 
 
 def test_get_parser_method_google():
-    with patch("treant.treant.GoogleDocAI") as MockGoogle:
-        parser = get_parser_method("google_doc_ai")
-        assert parser == MockGoogle.return_value
+    """Built-in 'google_doc_ai' entry point should resolve to GoogleDocAI."""
+    from treant.google_document_ai import GoogleDocAI
+
+    parser = get_parser_method("google_doc_ai")
+    assert isinstance(parser, GoogleDocAI)
 
 
 def test_get_parser_default_method():
-    with patch("treant.treant.DoclingParser") as MockDocling:
-        parser = get_parser_method("invalid")
-        assert parser == MockDocling.return_value
+    """Unknown parser names should fall back to the default (docling)."""
+    from treant.docling import DoclingParser
+
+    parser = get_parser_method("invalid")
+    assert isinstance(parser, DoclingParser)
+
+
+# Plugin registry tests
+
+
+class _StubParser(Parser):
+    """Minimal concrete parser for testing registration."""
+
+    def check_installation(self) -> bool:
+        return True
+
+
+class TestParserRegistry:
+    """Tests for the treant.parser_registry module."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_registry(self):
+        """Reset the registry before each test and restore after."""
+        _reset()
+        # Re-load built-in entry points so other tests aren't affected.
+        yield
+        _reset()
+
+    def test_register_and_resolve(self):
+        register("stub", _StubParser)
+        parser = get_parser("stub")
+        assert isinstance(parser, _StubParser)
+
+    def test_duplicate_register_raises(self):
+        register("stub", _StubParser)
+        with pytest.raises(ValueError, match="already registered"):
+            register("stub", _StubParser)
+
+    def test_available_parsers_includes_registered(self):
+        register("aaa_stub", _StubParser)
+        names = available_parsers()
+        assert "aaa_stub" in names
+
+    def test_fallback_when_default_registered(self):
+        """When 'docling' is registered, unknown names fall back to it."""
+        register("docling", _StubParser)
+        parser = get_parser("no_such_parser")
+        assert isinstance(parser, _StubParser)
+
+    def test_fallback_when_default_missing_raises(self):
+        """When even the default parser is absent, RuntimeError is raised."""
+        # Registry is empty after _reset(); also suppress entry-point discovery
+        # so the built-in parsers aren't re-loaded.
+        with patch("treant.parser_registry.entry_points", return_value=[]):
+            with pytest.raises(RuntimeError, match="Default parser"):
+                get_parser("no_such_parser")
+
+    def test_case_insensitive_lookup(self):
+        register("my_parser", _StubParser)
+        parser = get_parser("  My_Parser  ")
+        assert isinstance(parser, _StubParser)
+
+    def test_entry_points_load_builtin_parsers(self):
+        """Entry-point discovery should pick up the built-in parsers."""
+        names = available_parsers()
+        assert "docling" in names
+        assert "google_doc_ai" in names
+
+    def test_programmatic_takes_priority_over_entry_point(self):
+        """A programmatic registration should shadow an entry-point parser."""
+        register("docling", _StubParser)
+        # Force re-discovery; the programmatic one should stick.
+        parser = get_parser("docling")
+        assert isinstance(parser, _StubParser)
 
 
 @pytest.mark.asyncio
