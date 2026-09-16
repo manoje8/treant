@@ -27,6 +27,9 @@ class Settings:
 
     PDF_CHUNK_MAX_CONCURRENCY: int = int(os.getenv("PDF_CHUNK_MAX_CONCURRENCY", 4))
 
+    TREANT_CACHE_MAX_AGE_DAYS: int = int(os.getenv("TREANT_CACHE_MAX_AGE_DAYS", 30))
+    TREANT_CACHE_MAX_SIZE_MB: float = float(os.getenv("TREANT_CACHE_MAX_SIZE_MB", 500.0))
+
     CACHE_DIR = Path(".cache/doc_parser")
 
 
