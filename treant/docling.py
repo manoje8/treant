@@ -281,7 +281,7 @@ class DoclingParser(Parser):
         base_output_dir = (
             self._unique_output_dir(output_dir, file_path)
             if output_dir
-            else file_path.parent / "docling_output"
+            else file_path.parent / f"{file_path.stem}-docling_output"
         )
 
         base_output_dir.mkdir(parents=True, exist_ok=True)

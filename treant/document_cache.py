@@ -1,9 +1,10 @@
-import fcntl
+import contextlib
 import gzip
 import hashlib
 import json
 import logging
 import os
+import platform
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +16,40 @@ _DEFAULT_MAX_AGE_DAYS: int = 30
 _DEFAULT_MAX_SIZE_MB: float = 500.0
 
 
+@contextlib.contextmanager
+def _file_lock(lock_path: str | Path, shared: bool = False):
+    """
+    Cross-platform file lock using stdlib modules.
+
+    On POSIX: uses ``fcntl.flock`` (shared or exclusive).
+    On Windows: uses ``msvcrt.locking`` (exclusive only — shared
+    locks are not supported by ``msvcrt``, so all locks are exclusive).
+    """
+
+    if platform.system() == "Windows":
+        import msvcrt
+
+        with open(lock_path, "a+") as lf:
+            lf.seek(0)
+            msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield lf
+            finally:
+                lf.seek(0)
+                msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)
+
+    else:
+        import fcntl
+
+        with open(lock_path, "a+") as lf:
+            fcntl.flock(lf, fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
+
+            try:
+                yield lf
+            finally:
+                fcntl.flock(lf, fcntl.LOCK_UN)
+
+
 class DocumentCache:
     """
     Filesystem-backed cache for parsed document content.
@@ -24,8 +59,9 @@ class DocumentCache:
 
     Thread / multi-process safety
     ``manifest.json`` is protected by a companion ``manifest.json.lock``
-    file using POSIX advisory locks (``fcntl.flock``).  Writes use the
-    atomic temp-file + ``os.replace`` pattern so readers never see a
+    file using a platform-aware file lock (``fcntl.flock`` on POSIX,
+    ``msvcrt.locking`` on Windows).  Writes use the atomic
+    temp-file + ``os.replace`` pattern so readers never see a
     partially-written manifest.
 
     Eviction policy
@@ -66,16 +102,12 @@ class DocumentCache:
         if not self._manifest_path.exists():
             return {}
 
-        with open(self._lock_path, "a+") as lf:
-            fcntl.flock(lf, fcntl.LOCK_SH)
+        with _file_lock(self._lock_path, shared=True):
             try:
-                try:
-                    return json.loads(self._manifest_path.read_text(encoding="utf-8"))
-                except json.JSONDecodeError:
-                    logger.error("Cache - Manifest corrupted, starting fresh")
-                    return {}
-            finally:
-                fcntl.flock(lf, fcntl.LOCK_UN)
+                return json.loads(self._manifest_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                logger.error("Cache - Manifest corrupted, starting fresh")
+                return {}
 
     def _save_manifest(self) -> None:
         """Write the manifest atomically under an exclusive lock.
@@ -90,28 +122,24 @@ class DocumentCache:
         """
         self._manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(self._lock_path, "a+") as lf:
-            fcntl.flock(lf, fcntl.LOCK_EX)
+        with _file_lock(self._lock_path, shared=False):
+            payload = json.dumps(self._manifest, indent=2, ensure_ascii=False)
+            fd, tmp_path = tempfile.mkstemp(
+                dir=self._manifest_path.parent,
+                prefix=".manifest_tmp_",
+                suffix=".json",
+            )
             try:
-                payload = json.dumps(self._manifest, indent=2, ensure_ascii=False)
-                fd, tmp_path = tempfile.mkstemp(
-                    dir=self._manifest_path.parent,
-                    prefix=".manifest_tmp_",
-                    suffix=".json",
-                )
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(payload)
+                os.replace(tmp_path, self._manifest_path)
+            except Exception:
+                # Clean up the orphaned temp file on failure.
                 try:
-                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                        fh.write(payload)
-                    os.replace(tmp_path, self._manifest_path)
-                except Exception:
-                    # Clean up the orphaned temp file on failure.
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-                    raise
-            finally:
-                fcntl.flock(lf, fcntl.LOCK_UN)
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
 
     @staticmethod
     def _hash_file_content(file_path: Path) -> str:
