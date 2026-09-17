@@ -9,6 +9,7 @@ description = "A simple document parser"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "aiofiles",
     "beautifulsoup4",
     "docling",
     "trafilatura",

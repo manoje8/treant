@@ -18,66 +18,66 @@ def cache_env(tmp_path):
     return cache, source_file
 
 
-def _store_entry(cache, key, source_file, blocks=None, cached_at=None):
+async def _store_entry(cache, key, source_file, blocks=None, cached_at=None):
     """Helper: store an entry and optionally backdate its cached_at timestamp."""
     if blocks is None:
         blocks = [{"type": "text", "text": f"content-{key[:8]}"}]
-    cache.store(key, blocks, source_file, parse_method="docling")
+    await cache.store(key, blocks, source_file, parse_method="docling")
     if cached_at is not None:
         cache._manifest[key]["cached_at"] = cached_at
-        cache._save_manifest()
+        await cache._save_manifest()
 
 
 class TestStoreAndGet:
-    def test_round_trip(self, cache_env):
+    async def test_round_trip(self, cache_env):
         cache, src = cache_env
         blocks = [{"type": "text", "text": "hello"}]
-        cache.store("key1", blocks, src, parse_method="docling")
-        assert cache.get("key1") == blocks
+        await cache.store("key1", blocks, src, parse_method="docling")
+        assert await cache.get("key1") == blocks
 
-    def test_get_missing_key_returns_none(self, cache_env):
+    async def test_get_missing_key_returns_none(self, cache_env):
         cache, _ = cache_env
-        assert cache.get("nonexistent") is None
+        assert await cache.get("nonexistent") is None
 
 
 class TestInvalidate:
-    def test_invalidate_removes_matching_entries(self, cache_env):
+    async def test_invalidate_removes_matching_entries(self, cache_env):
         cache, src = cache_env
-        cache.store("k1", [{"t": 1}], src, parse_method="docling")
-        cache.store("k2", [{"t": 2}], src, parse_method="docling")
+        await cache.store("k1", [{"t": 1}], src, parse_method="docling")
+        await cache.store("k2", [{"t": 2}], src, parse_method="docling")
 
-        removed = cache.invalidate(str(src))
+        removed = await cache.invalidate(str(src))
         assert removed == 2
-        assert cache.get("k1") is None
-        assert cache.get("k2") is None
+        assert await cache.get("k1") is None
+        assert await cache.get("k2") is None
 
-    def test_invalidate_no_match(self, cache_env):
+    async def test_invalidate_no_match(self, cache_env):
         cache, src = cache_env
-        cache.store("k1", [{"t": 1}], src, parse_method="docling")
-        assert cache.invalidate("/no/such/file") == 0
-        assert cache.get("k1") is not None
+        await cache.store("k1", [{"t": 1}], src, parse_method="docling")
+        assert await cache.invalidate("/no/such/file") == 0
+        assert await cache.get("k1") is not None
 
 
 class TestClear:
-    def test_clear_removes_all(self, cache_env):
+    async def test_clear_removes_all(self, cache_env):
         cache, src = cache_env
-        cache.store("a", [{"x": 1}], src, parse_method="docling")
-        cache.store("b", [{"x": 2}], src, parse_method="docling")
+        await cache.store("a", [{"x": 1}], src, parse_method="docling")
+        await cache.store("b", [{"x": 2}], src, parse_method="docling")
 
-        removed = cache.clear()
+        removed = await cache.clear()
         assert removed == 2
-        assert cache.get("a") is None
-        assert cache.get("b") is None
+        assert await cache.get("a") is None
+        assert await cache.get("b") is None
 
-    def test_clear_on_empty_cache(self, cache_env):
+    async def test_clear_on_empty_cache(self, cache_env):
         cache, _ = cache_env
-        assert cache.clear() == 0
+        assert await cache.clear() == 0
 
 
 class TestStats:
-    def test_stats_empty(self, cache_env):
+    async def test_stats_empty(self, cache_env):
         cache, _ = cache_env
-        s = cache.stats()
+        s = await cache.stats()
         assert s["entries"] == 0
         assert s["size_mb"] == 0
         assert s["max_age_days"] == 30
@@ -85,10 +85,10 @@ class TestStats:
         assert s["oldest_entry"] is None
         assert s["newest_entry"] is None
 
-    def test_stats_with_entries(self, cache_env):
+    async def test_stats_with_entries(self, cache_env):
         cache, src = cache_env
-        cache.store("s1", [{"t": 1}], src, parse_method="docling")
-        s = cache.stats()
+        await cache.store("s1", [{"t": 1}], src, parse_method="docling")
+        s = await cache.stats()
         assert s["entries"] == 1
         assert s["size_mb"] >= 0
         assert s["oldest_entry"] is not None
@@ -96,7 +96,7 @@ class TestStats:
 
 
 class TestAgeEviction:
-    def test_expired_entries_are_evicted_on_store(self, tmp_path):
+    async def test_expired_entries_are_evicted_on_store(self, tmp_path):
         source_file = tmp_path / "source.pdf"
         source_file.write_bytes(b"hello world")
         cache = DocumentCache(
@@ -107,21 +107,21 @@ class TestAgeEviction:
 
         # Store an entry backdated to 10 days ago
         old_ts = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
-        _store_entry(cache, "old_key", source_file, cached_at=old_ts)
+        await _store_entry(cache, "old_key", source_file, cached_at=old_ts)
 
         # Confirm it exists before eviction runs
         assert "old_key" in cache._manifest
 
         # Storing a new entry triggers _enforce_limits
-        cache.store("new_key", [{"t": "new"}], source_file, parse_method="docling")
+        await cache.store("new_key", [{"t": "new"}], source_file, parse_method="docling")
 
         # The old entry should have been evicted
         assert "old_key" not in cache._manifest
-        assert cache.get("old_key") is None
+        assert await cache.get("old_key") is None
         # The new entry is fine
-        assert cache.get("new_key") is not None
+        assert await cache.get("new_key") is not None
 
-    def test_fresh_entries_are_kept(self, tmp_path):
+    async def test_fresh_entries_are_kept(self, tmp_path):
         source_file = tmp_path / "source.pdf"
         source_file.write_bytes(b"hello world")
         cache = DocumentCache(
@@ -130,16 +130,16 @@ class TestAgeEviction:
             max_size_mb=500,
         )
 
-        cache.store("fresh", [{"t": "ok"}], source_file, parse_method="docling")
+        await cache.store("fresh", [{"t": "ok"}], source_file, parse_method="docling")
         # Trigger enforce_limits again via another store
-        cache.store("fresh2", [{"t": "ok2"}], source_file, parse_method="docling")
+        await cache.store("fresh2", [{"t": "ok2"}], source_file, parse_method="docling")
 
         assert "fresh" in cache._manifest
         assert "fresh2" in cache._manifest
 
 
 class TestSizeEviction:
-    def test_oldest_entries_evicted_when_over_limit(self, tmp_path):
+    async def test_oldest_entries_evicted_when_over_limit(self, tmp_path):
         source_file = tmp_path / "source.pdf"
         source_file.write_bytes(b"hello world")
 
@@ -152,14 +152,14 @@ class TestSizeEviction:
 
         # Store several entries — each gzipped JSON payload will exceed the limit
         big_blocks = [{"text": "x" * 200}]
-        _store_entry(
+        await _store_entry(
             cache,
             "entry_old",
             source_file,
             blocks=big_blocks,
             cached_at=(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
         )
-        _store_entry(
+        await _store_entry(
             cache,
             "entry_mid",
             source_file,
@@ -168,7 +168,7 @@ class TestSizeEviction:
         )
 
         # This store should trigger size eviction of the oldest entries
-        cache.store("entry_new", big_blocks, source_file, parse_method="docling")
+        await cache.store("entry_new", big_blocks, source_file, parse_method="docling")
 
         # The newest entry should survive; at least one old entry should be gone
         assert "entry_new" in cache._manifest
@@ -178,17 +178,17 @@ class TestSizeEviction:
 
 
 class TestEnvVarDefaults:
-    def test_max_age_from_env(self, tmp_path, monkeypatch):
+    async def test_max_age_from_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TREANT_CACHE_MAX_AGE_DAYS", "14")
         cache = DocumentCache(project_root=tmp_path)
         assert cache.max_age_days == 14
 
-    def test_max_size_from_env(self, tmp_path, monkeypatch):
+    async def test_max_size_from_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TREANT_CACHE_MAX_SIZE_MB", "256")
         cache = DocumentCache(project_root=tmp_path)
         assert cache.max_size_mb == 256.0
 
-    def test_constructor_overrides_env(self, tmp_path, monkeypatch):
+    async def test_constructor_overrides_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TREANT_CACHE_MAX_AGE_DAYS", "14")
         monkeypatch.setenv("TREANT_CACHE_MAX_SIZE_MB", "256")
         cache = DocumentCache(project_root=tmp_path, max_age_days=60, max_size_mb=1024)

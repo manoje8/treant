@@ -1,5 +1,5 @@
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -30,8 +30,8 @@ def mock_parser():
 def mock_cache():
     """Patch DocumentCache so no real filesystem cache is used in unit tests."""
     with (
-        patch("treant.treant.DocumentCache.get", return_value=None),
-        patch("treant.treant.DocumentCache.store"),
+        patch("treant.treant.DocumentCache.get", new_callable=AsyncMock, return_value=None),
+        patch("treant.treant.DocumentCache.store", new_callable=AsyncMock),
     ):
         yield
 

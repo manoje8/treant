@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Windows compatibility** | Use fcntl.flock on Linux/macOS, and msvcrt.locking on Windows in Document cache
+- **Async-native cache** - 	Rewrite DocumentCache with aiofiles for non-blocking I/O, matching the async process_document API.
 
 ## [0.2.1] — 2026-09-16
 

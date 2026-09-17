@@ -127,22 +127,22 @@ def _resolve_project_root(raw: str | None) -> Path:
     return Path(raw) if raw else Path.cwd()
 
 
-def _handle_cache(args: argparse.Namespace) -> None:
+async def _handle_cache(args: argparse.Namespace) -> None:
     """Dispatch ``treant cache {stats,clear,invalidate}``."""
     project_root = _resolve_project_root(args.project_root)
     cache = DocumentCache(project_root=project_root)
 
     if args.cache_action == "stats":
-        info = cache.stats()
+        info = await cache.stats()
         print(json.dumps(info, indent=2))
 
     elif args.cache_action == "clear":
-        removed = cache.clear()
+        removed = await cache.clear()
         print(f"Cleared {removed} cache entries.")
 
     elif args.cache_action == "invalidate":
         file_path = Path(args.file).resolve()
-        removed = cache.invalidate(str(file_path))
+        removed = await cache.invalidate(str(file_path))
         if removed:
             print(f"Invalidated {removed} cache entries for {file_path}.")
         else:
@@ -189,7 +189,7 @@ async def main() -> None:
 
     try:
         if args.command == "cache":
-            _handle_cache(args)
+            await _handle_cache(args)
 
         elif args.command == "parse":
             await _handle_parse(args)

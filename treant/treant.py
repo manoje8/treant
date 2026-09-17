@@ -160,7 +160,7 @@ async def process_document(
     logger.info(f"Processing: {file_path.name} ({file_size / 1024:.1f} KB)")
 
     cache_key = generate_cache_key(file_path, parse_method)
-    cache_result = cache.get(cache_key)
+    cache_result = await cache.get(cache_key)
 
     if cache_result is not None:
         logger.info(f"Cache HIT - Returning cached result for {file_path}")
@@ -235,7 +235,7 @@ async def process_document(
 
     logger.info(f"Successfully extracted {len(content_list)} content blocks")
 
-    cache.store(cache_key, content_list, file_path, parse_method=parse_method)
+    await cache.store(cache_key, content_list, file_path, parse_method=parse_method)
     doc_id = generate_doc_id(file_path)
 
     if display_stats:
