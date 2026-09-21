@@ -1,4 +1,4 @@
-from main import setup_argument_parser
+from treant.treant_cli import setup_argument_parser
 
 
 def test_setup_argument_parser():

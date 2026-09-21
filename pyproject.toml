@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "treant"
-version = "0.2.2"
+version = "0.2.3"
 description = "A simple document parser"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -29,7 +29,7 @@ dev = [
 ]
 
 [project.scripts]
-treant = "main:cli"
+treant = "treant.treant_cli:cli"
 
 [project.entry-points."treant.parsers"]
 docling = "treant.docling:DoclingParser"

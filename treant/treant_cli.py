@@ -26,7 +26,8 @@ logger = logging.getLogger(__name__)
 
 
 def setup_argument_parser() -> argparse.ArgumentParser:
-    """Configure and return the argument parser for the CLI.
+    """
+    Configure and return the argument parser for the CLI.
 
     Returns:
         Configured ArgumentParser instance.

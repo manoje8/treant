@@ -48,8 +48,9 @@ def test_get_parser_method_google():
     """Built-in 'google_doc_ai' entry point should resolve to GoogleDocAI."""
     from treant.google_document_ai import GoogleDocAI
 
-    parser = get_parser_method("google_doc_ai")
-    assert isinstance(parser, GoogleDocAI)
+    with patch("treant.google_document_ai.documentai.DocumentProcessorServiceClient"):
+        parser = get_parser_method("google_doc_ai")
+        assert isinstance(parser, GoogleDocAI)
 
 
 def test_get_parser_default_method():
